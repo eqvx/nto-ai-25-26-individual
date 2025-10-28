@@ -7,3 +7,6 @@ __pycache__/
 
 data/
 output/
+
+stage1_evaluate.py
+submission.csv
