@@ -22,3 +22,4 @@ output/
 *.log
 logs/
 .monitor_pid
+solution.csv

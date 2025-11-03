@@ -4,24 +4,34 @@ Main training script for the LightGBM model.
 
 import lightgbm as lgb
 import numpy as np
+import pandas as pd
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.model_selection import GroupKFold
 
 from . import config, constants
-from .data_processing import load_and_merge_data
-from .features import create_features
 
 
 def train() -> None:
-    """Runs the full model training pipeline.
+    """Runs the model training pipeline.
 
-    Loads and processes data, engineers features, then trains a LightGBM model
+    Loads prepared data from data/processed/, then trains a LightGBM model
     for each of the 5 folds using GroupKFold cross-validation. Trained models
     are saved to the directory specified in the config.
+
+    Note: Data must be prepared first using prepare_data.py
     """
-    # Load and process data
-    merged_df, book_genres_df, _, descriptions_df = load_and_merge_data()
-    featured_df = create_features(merged_df, book_genres_df, descriptions_df)
+    # Load prepared data
+    processed_path = config.PROCESSED_DATA_DIR / constants.PROCESSED_DATA_FILENAME
+
+    if not processed_path.exists():
+        raise FileNotFoundError(
+            f"Processed data not found at {processed_path}. "
+            "Please run 'poetry run python -m src.baseline.prepare_data' first."
+        )
+
+    print(f"Loading prepared data from {processed_path}...")
+    featured_df = pd.read_parquet(processed_path, engine="pyarrow")
+    print(f"Loaded {len(featured_df):,} rows with {len(featured_df.columns)} features")
 
     # Separate train and test sets
     train_set = featured_df[featured_df[constants.COL_SOURCE] == constants.VAL_SOURCE_TRAIN].copy()

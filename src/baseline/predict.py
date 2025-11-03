@@ -4,22 +4,32 @@ Inference script to generate predictions for the test set.
 
 import lightgbm as lgb
 import numpy as np
+import pandas as pd
 
 from . import config, constants
-from .data_processing import load_and_merge_data
-from .features import create_features
 
 
 def predict() -> None:
     """Generates and saves predictions for the test set.
 
-    This script loads the complete dataset, applies the same feature engineering
-    pipeline as in training, then loads the 5 trained models. It averages the
-    predictions from all models and saves the result to a submission file.
+    This script loads prepared data from data/processed/, then loads the 5 trained models.
+    It averages the predictions from all models and saves the result to a submission file.
+
+    Note: Data must be prepared first using prepare_data.py, and models must be trained
+    using train.py
     """
-    # Load and process data
-    merged_df, book_genres_df, _, descriptions_df = load_and_merge_data()
-    featured_df = create_features(merged_df, book_genres_df, descriptions_df)
+    # Load prepared data
+    processed_path = config.PROCESSED_DATA_DIR / constants.PROCESSED_DATA_FILENAME
+
+    if not processed_path.exists():
+        raise FileNotFoundError(
+            f"Processed data not found at {processed_path}. "
+            "Please run 'poetry run python -m src.baseline.prepare_data' first."
+        )
+
+    print(f"Loading prepared data from {processed_path}...")
+    featured_df = pd.read_parquet(processed_path, engine="pyarrow")
+    print(f"Loaded {len(featured_df):,} rows with {len(featured_df.columns)} features")
 
     # Separate test set for prediction
     test_set = featured_df[featured_df[constants.COL_SOURCE] == constants.VAL_SOURCE_TEST].copy()

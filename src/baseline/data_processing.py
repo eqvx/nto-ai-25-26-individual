@@ -15,6 +15,9 @@ def load_and_merge_data() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.
     Combines train and test sets, then joins user and book metadata. The genre
     and description data are returned separately as they're needed for feature engineering.
 
+    Only training records with has_read=1 (books that received a rating) are used
+    for training. Records with has_read=0 are excluded.
+
     Returns:
         tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]: A tuple containing:
             - The merged DataFrame (train + test + metadata).
@@ -49,6 +52,12 @@ def load_and_merge_data() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.
             if k in [constants.COL_USER_ID, constants.COL_BOOK_ID, constants.COL_TARGET]
         },
     )
+
+    # Filter training data: only use books that received a rating (has_read=1)
+    initial_count = len(train_df)
+    train_df = train_df[train_df[constants.COL_HAS_READ] == 1].copy()
+    filtered_count = len(train_df)
+    print(f"Filtered training data: {initial_count} -> {filtered_count} rows (only has_read=1)")
     test_df = pd.read_csv(
         config.RAW_DATA_DIR / constants.TEST_FILENAME,
         dtype={k: v for k, v in dtype_spec.items() if k in [constants.COL_USER_ID, constants.COL_BOOK_ID]},

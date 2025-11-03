@@ -17,6 +17,7 @@ SUBMISSION_FILENAME = "submission.csv"
 TFIDF_VECTORIZER_FILENAME = "tfidf_vectorizer.pkl"
 BERT_EMBEDDINGS_FILENAME = "bert_embeddings.pkl"
 BERT_MODEL_NAME = "DeepPavlov/rubert-base-cased"
+PROCESSED_DATA_FILENAME = "processed_features.parquet"
 
 # --- COLUMN NAMES ---
 # Main columns
@@ -25,6 +26,7 @@ COL_BOOK_ID = "book_id"
 COL_TARGET = "rating"
 COL_SOURCE = "source"
 COL_PREDICTION = "rating_predict"
+COL_HAS_READ = "has_read"
 
 # Feature columns (newly created)
 F_USER_MEAN_RATING = "user_mean_rating"

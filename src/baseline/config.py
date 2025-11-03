@@ -15,6 +15,8 @@ from . import constants
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = ROOT_DIR / "data"
 RAW_DATA_DIR = DATA_DIR / "raw"
+INTERIM_DATA_DIR = DATA_DIR / "interim"
+PROCESSED_DATA_DIR = DATA_DIR / "processed"
 OUTPUT_DIR = ROOT_DIR / "output"
 MODEL_DIR = OUTPUT_DIR / "models"
 SUBMISSION_DIR = OUTPUT_DIR / "submissions"
@@ -42,7 +44,7 @@ BERT_MAX_LENGTH = 512
 BERT_EMBEDDING_DIM = 768
 BERT_DEVICE = "cuda" if torch and torch.cuda.is_available() else "cpu"
 # Limit GPU memory usage to 50% to prevent overheating and OOM errors
-BERT_GPU_MEMORY_FRACTION = 0.5
+BERT_GPU_MEMORY_FRACTION = 0.75
 
 
 # --- FEATURES ---

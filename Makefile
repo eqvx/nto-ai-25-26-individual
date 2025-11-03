@@ -1,4 +1,4 @@
-.PHONY: install train predict validate run clean download-data
+.PHONY: install train predict validate run clean download-data prepare-data
 
 install:
 	@echo "Assuming dependencies are managed by poetry. Use 'poetry install'."
@@ -14,6 +14,10 @@ download-data:
 	fi
 	@echo "Data downloaded successfully to data/raw/"
 
+prepare-data:
+	@echo "Preparing and processing data..."
+	poetry run python -m src.baseline.prepare_data
+
 train:
 	@echo "Running training script..."
 	poetry run python -m src.baseline.train
@@ -26,11 +30,12 @@ validate:
 	@echo "Running validation script..."
 	poetry run python -m src.baseline.validate
 
-run: train predict validate
+run: prepare-data train predict validate
 	@echo "Full pipeline executed successfully."
 
 clean:
 	@echo "Cleaning output directories..."
 	rm -f output/models/*
 	rm -f output/submissions/*
+	rm -f data/processed/*
 	@echo "Done."
