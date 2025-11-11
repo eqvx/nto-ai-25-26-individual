@@ -99,7 +99,6 @@ poetry run python -m src.baseline.validate
 Или через Makefile:
 
 ```bash
-make download-data # Скачивание и распаковка данных
 make prepare-data  # Подготовка данных
 make train         # Обучение
 make predict       # Предсказание
