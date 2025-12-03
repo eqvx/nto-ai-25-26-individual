@@ -1,41 +1,27 @@
-.PHONY: install train predict validate run clean download-data prepare-data
+# Advanced ML Pipeline Makefile
 
-install:
-	@echo "Assuming dependencies are managed by poetry. Use 'poetry install'."
+.PHONY: all prepare_data train_lgbm train_ensemble predict clean
 
-download-data:
-	@echo "Downloading data from Google Drive..."
-	@mkdir -p data/raw
-	@poetry run gdown --folder https://drive.google.com/drive/folders/1ioqrB9146B9DLcEVD7V3LIl46IYAyBfm -O data/raw/
-	@if [ -d "data/raw/public" ]; then \
-		mv data/raw/public/*.csv data/raw/ && \
-		rmdir data/raw/public && \
-		echo "Files moved from data/raw/public/ to data/raw/"; \
-	fi
-	@echo "Data downloaded successfully to data/raw/"
+# Run the full workflow: prepare data, train baseline, train ensemble
+all: prepare_data train_lgbm train_ensemble
 
-prepare-data:
-	@echo "Preparing and processing data..."
+# Generate full-featured processed dataset
+prepare_data:
 	poetry run python -m src.baseline.prepare_data
 
-train:
-	@echo "Running training script..."
+# Train baseline LightGBM (with leakage-safe features)
+train_lgbm:
 	poetry run python -m src.baseline.train
 
-predict:
-	@echo "Running prediction script..."
+# Train LightGBM + NeuralNet and blend for an ensemble
+train_ensemble:
+	poetry run python -m src.train_ensemble
+
+# Generate predictions on the test set using baseline LightGBM
+predict: train_lgbm
 	poetry run python -m src.baseline.predict
 
-validate:
-	@echo "Running validation script..."
-	poetry run python -m src.baseline.validate
-
-run: prepare-data train predict validate
-	@echo "Full pipeline executed successfully."
-
+# Clean up models and outputs
 clean:
-	@echo "Cleaning output directories..."
-	rm -f output/models/*
-	rm -f output/submissions/*
-	rm -f data/processed/*
-	@echo "Done."
+	rm -rf output/models output/submissions data/processed/processed_features.parquet
+	echo "Cleaned models, submissions, processed features."

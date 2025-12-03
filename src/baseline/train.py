@@ -129,6 +129,8 @@ def train() -> None:
         callbacks=fit_params["callbacks"],
     )
 
+    print(f"Best iteration: {model.best_iteration_}")
+
     # Evaluate the model
     val_preds = model.predict(X_val)
     rmse = np.sqrt(mean_squared_error(y_val, val_preds))
@@ -141,6 +143,12 @@ def train() -> None:
     print(f"Model saved to {model_path}")
 
     print("\nTraining complete.")
+    print("Top 20 important features:")
+    importances = model.booster_.feature_importance()
+    feat_names = X_train.columns
+    for i in np.argsort(-importances)[:20]:
+        print(f"{feat_names[i]}: {importances[i]}")
+    
 
 
 if __name__ == "__main__":

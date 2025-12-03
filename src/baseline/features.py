@@ -14,6 +14,12 @@ from transformers import AutoModel, AutoTokenizer
 
 from . import config, constants
 
+# 1. Imports for new feature modules
+# Update imports for poetry/python -m compatibility
+from src.features.tfidf_features import TfidfFeatureGenerator
+from src.features.bert_features import compute_bert_embeddings
+from src.features.user_book_embeddings import UserBookEmbedder
+
 
 def add_aggregate_features(df: pd.DataFrame, train_df: pd.DataFrame) -> pd.DataFrame:
     """Calculates and adds user, book, and author aggregate features.
@@ -75,209 +81,60 @@ def add_genre_features(df: pd.DataFrame, book_genres_df: pd.DataFrame) -> pd.Dat
     return df.merge(genre_counts, on=constants.COL_BOOK_ID, how="left")
 
 
-def add_text_features(df: pd.DataFrame, train_df: pd.DataFrame, descriptions_df: pd.DataFrame) -> pd.DataFrame:
-    """Adds TF-IDF features from book descriptions.
-
-    Trains a TF-IDF vectorizer only on training data descriptions to avoid
-    data leakage. Applies the vectorizer to all books and merges the features.
-
-    Args:
-        df (pd.DataFrame): The main DataFrame to add features to.
-        train_df (pd.DataFrame): The training portion for fitting the vectorizer.
-        descriptions_df (pd.DataFrame): DataFrame with book descriptions.
-
-    Returns:
-        pd.DataFrame: The DataFrame with TF-IDF features added.
-    """
-    print("Adding text features (TF-IDF)...")
-
-    # Ensure model directory exists
-    config.MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    vectorizer_path = config.MODEL_DIR / constants.TFIDF_VECTORIZER_FILENAME
-
-    # Get unique books from train set
-    train_books = train_df[constants.COL_BOOK_ID].unique()
-
-    # Extract descriptions for training books only
-    train_descriptions = descriptions_df[descriptions_df[constants.COL_BOOK_ID].isin(train_books)].copy()
-    train_descriptions[constants.COL_DESCRIPTION] = train_descriptions[constants.COL_DESCRIPTION].fillna("")
-
-    # Check if vectorizer already exists (for prediction)
-    if vectorizer_path.exists():
-        print(f"Loading existing vectorizer from {vectorizer_path}")
-        vectorizer = joblib.load(vectorizer_path)
+# --- REPLACEMENT: add_text_features, add_bert_features, plus collaborative embeddings ---
+def add_text_features_new(df, desc_col="description", fit_on=None, cfg=None):
+    # New TF-IDF pipeline
+    tfg = TfidfFeatureGenerator(max_features=cfg.get("tfidf_max_features", 500), min_df=cfg.get("tfidf_min_df", 2),
+                               max_df=cfg.get("tfidf_max_df", 0.95), ngram_range=tuple(cfg.get("tfidf_ngram_range", (1,2))))
+    if fit_on is not None:
+        tfg.fit(fit_on, text_col=desc_col)
     else:
-        # Fit vectorizer on training descriptions only
-        print("Fitting TF-IDF vectorizer on training descriptions...")
-        vectorizer = TfidfVectorizer(
-            max_features=config.TFIDF_MAX_FEATURES,
-            min_df=config.TFIDF_MIN_DF,
-            max_df=config.TFIDF_MAX_DF,
-            ngram_range=config.TFIDF_NGRAM_RANGE,
-        )
-        vectorizer.fit(train_descriptions[constants.COL_DESCRIPTION])
-        # Save vectorizer for use in prediction
-        joblib.dump(vectorizer, vectorizer_path)
-        print(f"Vectorizer saved to {vectorizer_path}")
+        tfg.fit(df, text_col=desc_col)
+    tfidf_df = tfg.transform(df, text_col=desc_col)
+    df = pd.concat([df.reset_index(drop=True), tfidf_df.reset_index(drop=True)], axis=1)
+    return df
 
-    # Transform all book descriptions
-    all_descriptions = descriptions_df[[constants.COL_BOOK_ID, constants.COL_DESCRIPTION]].copy()
-    all_descriptions[constants.COL_DESCRIPTION] = all_descriptions[constants.COL_DESCRIPTION].fillna("")
+def add_bert_features_new(df, desc_df, desc_col="description", id_col="book_id", cfg=None):
+    # Check if BERT should be skipped
+    if cfg and cfg.get("skip_bert", False):
+        print("Skipping BERT features (skip_bert=True in config)")
+        bert_dim = 768
+        for i in range(bert_dim):
+            df[f"bert_{i}"] = 0.0
+        return df
+    
+    try:
+        bert_df = compute_bert_embeddings(desc_df[[id_col, desc_col]],
+                                          model_name=cfg.get("bert_model", "bert-base-multilingual-cased"),
+                                          description_col=desc_col, id_col=id_col,
+                                          batch_size=cfg.get("bert_batch_size", 2), 
+                                          max_length=cfg.get("bert_max_length", 128))
+        return df.merge(bert_df, on=id_col, how="left")
+    except (RuntimeError, MemoryError, OSError, Exception) as e:
+        print(f"Warning: BERT feature generation failed: {e}")
+        print("Continuing without BERT features (using zeros)...")
+        # Return df with dummy BERT columns filled with zeros to maintain shape
+        bert_dim = 768  # Standard BERT dimension
+        for i in range(bert_dim):
+            df[f"bert_{i}"] = 0.0
+        return df
 
-    # Get descriptions in the same order as df[book_id]
-    # Create a mapping book_id -> description
-    description_map = dict(
-        zip(all_descriptions[constants.COL_BOOK_ID], all_descriptions[constants.COL_DESCRIPTION], strict=False)
-    )
-
-    # Get descriptions for books in df (in the same order)
-    df_descriptions = df[constants.COL_BOOK_ID].map(description_map).fillna("")
-
-    # Transform to TF-IDF features
-    tfidf_matrix = vectorizer.transform(df_descriptions)
-
-    # Convert sparse matrix to DataFrame
-    tfidf_feature_names = [f"tfidf_{i}" for i in range(tfidf_matrix.shape[1])]
-    tfidf_df = pd.DataFrame(
-        tfidf_matrix.toarray(),
-        columns=tfidf_feature_names,
-        index=df.index,
-    )
-
-    # Concatenate TF-IDF features with main DataFrame
-    df_with_tfidf = pd.concat([df.reset_index(drop=True), tfidf_df.reset_index(drop=True)], axis=1)
-
-    print(f"Added {len(tfidf_feature_names)} TF-IDF features.")
-    return df_with_tfidf
-
-
-def add_bert_features(df: pd.DataFrame, _train_df: pd.DataFrame, descriptions_df: pd.DataFrame) -> pd.DataFrame:
-    """Adds BERT embeddings from book descriptions.
-
-    Extracts 768-dimensional embeddings using a pre-trained Russian BERT model.
-    Embeddings are cached on disk to avoid recomputation on subsequent runs.
-
-    Args:
-        df (pd.DataFrame): The main DataFrame to add features to.
-        _train_df (pd.DataFrame): The training portion (for consistency, not used for BERT).
-        descriptions_df (pd.DataFrame): DataFrame with book descriptions.
-
-    Returns:
-        pd.DataFrame: The DataFrame with BERT embeddings added.
-    """
-    print("Adding text features (BERT embeddings)...")
-
-    # Ensure model directory exists
-    config.MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    embeddings_path = config.MODEL_DIR / constants.BERT_EMBEDDINGS_FILENAME
-
-    # Check if embeddings are already cached
-    if embeddings_path.exists():
-        print(f"Loading cached BERT embeddings from {embeddings_path}")
-        embeddings_dict = joblib.load(embeddings_path)
-    else:
-        print("Computing BERT embeddings (this may take a while)...")
-        print(f"Using device: {config.BERT_DEVICE}")
-
-        # Limit GPU memory usage to prevent OOM errors
-        if config.BERT_DEVICE == "cuda" and torch is not None:
-            torch.cuda.set_per_process_memory_fraction(config.BERT_GPU_MEMORY_FRACTION)
-            print(f"GPU memory limited to {config.BERT_GPU_MEMORY_FRACTION * 100:.0f}% of available memory")
-
-        # Load tokenizer and model
-        tokenizer = AutoTokenizer.from_pretrained(config.BERT_MODEL_NAME)
-        model = AutoModel.from_pretrained(config.BERT_MODEL_NAME)
-        model.to(config.BERT_DEVICE)
-        model.eval()
-
-        # Prepare descriptions: get unique book_id -> description mapping
-        all_descriptions = descriptions_df[[constants.COL_BOOK_ID, constants.COL_DESCRIPTION]].copy()
-        all_descriptions[constants.COL_DESCRIPTION] = all_descriptions[constants.COL_DESCRIPTION].fillna("")
-
-        # Get unique books and their descriptions
-        unique_books = all_descriptions.drop_duplicates(subset=[constants.COL_BOOK_ID])
-        book_ids = unique_books[constants.COL_BOOK_ID].to_numpy()
-        descriptions = unique_books[constants.COL_DESCRIPTION].to_numpy().tolist()
-
-        # Initialize embeddings dictionary
-        embeddings_dict = {}
-
-        # Process descriptions in batches
-        num_batches = (len(descriptions) + config.BERT_BATCH_SIZE - 1) // config.BERT_BATCH_SIZE
-
-        with torch.no_grad():
-            for batch_idx in tqdm(range(num_batches), desc="Processing BERT batches", unit="batch"):
-                start_idx = batch_idx * config.BERT_BATCH_SIZE
-                end_idx = min(start_idx + config.BERT_BATCH_SIZE, len(descriptions))
-                batch_descriptions = descriptions[start_idx:end_idx]
-                batch_book_ids = book_ids[start_idx:end_idx]
-
-                # Tokenize batch
-                encoded = tokenizer(
-                    batch_descriptions,
-                    padding=True,
-                    truncation=True,
-                    max_length=config.BERT_MAX_LENGTH,
-                    return_tensors="pt",
-                )
-
-                # Move to device
-                encoded = {k: v.to(config.BERT_DEVICE) for k, v in encoded.items()}
-
-                # Get model outputs
-                outputs = model(**encoded)
-
-                # Mean pooling: average over sequence length dimension
-                # outputs.last_hidden_state shape: (batch_size, seq_len, hidden_size)
-                attention_mask = encoded["attention_mask"]
-                # Expand attention mask to match hidden_size dimension for broadcasting
-                attention_mask_expanded = attention_mask.unsqueeze(-1).expand(outputs.last_hidden_state.size()).float()
-
-                # Sum embeddings, weighted by attention mask
-                sum_embeddings = torch.sum(outputs.last_hidden_state * attention_mask_expanded, dim=1)
-                # Sum attention mask values for normalization
-                sum_mask = torch.clamp(attention_mask_expanded.sum(dim=1), min=1e-9)
-
-                # Mean pooling
-                mean_pooled = sum_embeddings / sum_mask
-
-                # Convert to numpy and store
-                batch_embeddings = mean_pooled.cpu().numpy()
-
-                for book_id, embedding in zip(batch_book_ids, batch_embeddings, strict=False):
-                    embeddings_dict[book_id] = embedding
-
-                # Small pause between batches to let GPU cool down and prevent overheating
-                if config.BERT_DEVICE == "cuda":
-                    time.sleep(0.2)  # 200ms pause between batches
-
-        # Save embeddings for future use
-        joblib.dump(embeddings_dict, embeddings_path)
-        print(f"Saved BERT embeddings to {embeddings_path}")
-
-    # Map embeddings to DataFrame rows by book_id
-    df_book_ids = df[constants.COL_BOOK_ID].to_numpy()
-
-    # Create embedding matrix
-    embeddings_list = []
-    for book_id in df_book_ids:
-        if book_id in embeddings_dict:
-            embeddings_list.append(embeddings_dict[book_id])
-        else:
-            # Zero embedding for books without descriptions
-            embeddings_list.append(np.zeros(config.BERT_EMBEDDING_DIM))
-
-    embeddings_array = np.array(embeddings_list)
-
-    # Create DataFrame with BERT features
-    bert_feature_names = [f"bert_{i}" for i in range(config.BERT_EMBEDDING_DIM)]
-    bert_df = pd.DataFrame(embeddings_array, columns=bert_feature_names, index=df.index)
-
-    # Concatenate BERT features with main DataFrame
-    df_with_bert = pd.concat([df.reset_index(drop=True), bert_df.reset_index(drop=True)], axis=1)
-
-    print(f"Added {len(bert_feature_names)} BERT features.")
-    return df_with_bert
+def add_user_book_embeddings(df, interactions_df, user_col="user_id", book_col="book_id", rating_col="rating", cfg=None):
+    embedder = UserBookEmbedder(no_components=cfg.get("lfm_dim", 32))
+    embedder.fit(interactions_df, user_col=user_col, book_col=book_col, rating_col=rating_col)
+    user_emb, book_emb = embedder.get_embedding_dfs()
+    # Convert merge keys to same type for reliable merging
+    # LightFM uses string IDs, but df might have int/float IDs - convert both to string for consistency
+    if user_col in df.columns and user_col in user_emb.columns:
+        df[user_col] = df[user_col].astype(str)
+        user_emb[user_col] = user_emb[user_col].astype(str)
+    if book_col in df.columns and book_col in book_emb.columns:
+        df[book_col] = df[book_col].astype(str)
+        book_emb[book_col] = book_emb[book_col].astype(str)
+    df = df.merge(user_emb, on=user_col, how="left")
+    df = df.merge(book_emb, on=book_col, how="left")
+    return df
+# ---
 
 
 def handle_missing_values(df: pd.DataFrame, train_df: pd.DataFrame) -> pd.DataFrame:  # noqa: C901
@@ -344,40 +201,45 @@ def handle_missing_values(df: pd.DataFrame, train_df: pd.DataFrame) -> pd.DataFr
 
 
 def create_features(
-    df: pd.DataFrame, book_genres_df: pd.DataFrame, descriptions_df: pd.DataFrame, include_aggregates: bool = False
+    df: pd.DataFrame, book_genres_df: pd.DataFrame, descriptions_df: pd.DataFrame, include_aggregates: bool = False, interactions_df=None, cfg=None
 ) -> pd.DataFrame:
-    """Runs the full feature engineering pipeline.
-
-    This function orchestrates the calls to add aggregate features (optional), genre
-    features, text features (TF-IDF and BERT), and handle missing values.
-
-    Args:
-        df (pd.DataFrame): The merged DataFrame from `data_processing`.
-        book_genres_df (pd.DataFrame): DataFrame mapping books to genres.
-        descriptions_df (pd.DataFrame): DataFrame with book descriptions.
-        include_aggregates (bool): If True, compute aggregate features. Defaults to False.
-            Aggregates are typically computed separately during training to avoid data leakage.
-
-    Returns:
-        pd.DataFrame: The final DataFrame with all features engineered.
-    """
-    print("Starting feature engineering pipeline...")
+    print("Starting feature engineering pipeline [ENHANCED]...")
     train_df = df[df[constants.COL_SOURCE] == constants.VAL_SOURCE_TRAIN].copy()
-
-    # Aggregate features are computed separately during training to ensure
-    # no data leakage from validation set timestamps
-    if include_aggregates:
-        df = add_aggregate_features(df, train_df)
-
-    df = add_genre_features(df, book_genres_df)
-    df = add_text_features(df, train_df, descriptions_df)
-    df = add_bert_features(df, train_df, descriptions_df)
-    df = handle_missing_values(df, train_df)
-
-    # Convert categorical columns to pandas 'category' dtype for LightGBM
-    for col in config.CAT_FEATURES:
-        if col in df.columns:
-            df[col] = df[col].astype("category")
-
-    print("Feature engineering complete.")
-    return df
+    
+    try:
+        if include_aggregates:
+            print("  [Step 1/6] Adding aggregate features...")
+            df = add_aggregate_features(df, train_df)
+        
+        print("  [Step 2/6] Adding genre features...")
+        df = add_genre_features(df, book_genres_df)
+        
+        print("  [Step 3/6] Adding TF-IDF features...")
+        df = add_text_features_new(df, desc_col=constants.COL_DESCRIPTION, fit_on=train_df, cfg=cfg)
+        
+        print("  [Step 4/6] Adding BERT features...")
+        df = add_bert_features_new(df, descriptions_df, desc_col=constants.COL_DESCRIPTION, id_col=constants.COL_BOOK_ID, cfg=cfg)
+        
+        print("  [Step 5/6] Adding user/book embeddings...")
+        if interactions_df is not None and not (cfg and cfg.get("skip_lfm", False)):
+            df = add_user_book_embeddings(df, interactions_df, user_col=constants.COL_USER_ID, book_col=constants.COL_BOOK_ID, rating_col=constants.COL_TARGET, cfg=cfg)
+        elif cfg and cfg.get("skip_lfm", False):
+            print("    Skipping LightFM (skip_lfm=True)")
+            lfm_dim = cfg.get("lfm_dim", 32)
+            for i in range(lfm_dim):
+                df[f"lfm_u_{i}"] = 0.0
+                df[f"lfm_b_{i}"] = 0.0
+        
+        print("  [Step 6/6] Handling missing values...")
+        df = handle_missing_values(df, train_df)
+        
+        for col in config.CAT_FEATURES:
+            if col in df.columns:
+                df[col] = df[col].astype("category")
+        print("Feature engineering complete [ENHANCED].")
+        return df
+    except Exception as e:
+        import traceback
+        print(f"\nERROR in create_features at step shown above:")
+        traceback.print_exc()
+        raise
